@@ -21,6 +21,8 @@ describe("validateDecisionCard", () => {
   it("accepts an approved card", () => {
     const r = validateDecisionCard(baseCard);
     expect(r.valid).toBe(true);
+    expect(r.full_schema_validated).toBe(false);
+    expect(r.validation_scope).toBe("selected_v0.1_fields_and_conditional_rules");
     expect(r.issues).toHaveLength(0);
     expect(r.status).toBe("approved");
   });
@@ -55,39 +57,53 @@ describe("validateDecisionCard", () => {
     const r = validateDecisionCard({ ...baseCard, decision_card_version: "0.9" });
     expect(r.issues.some((i) => i.kind === "unsupported_version")).toBe(true);
   });
+
+  it("rejects an unknown decision status and buyer type", () => {
+    const r = validateDecisionCard({
+      ...baseCard,
+      buyer: { name: "Example", type: "unknown" },
+      decision: { status: "approved-anything" },
+    });
+    expect(r.valid).toBe(false);
+    expect(r.issues.map((i) => i.kind)).toEqual(["unsupported_status", "unsupported_buyer_type"]);
+  });
 });
 
 describe("previewPolicyBundle", () => {
-  it("approved -> single allow-all policy", () => {
-    const b = previewPolicyBundle(baseCard);
-    expect(b.policies).toHaveLength(1);
-    expect(b.policies[0]?.default_effect).toBe("allow");
+  it("blocks approved cards without live attestation and scope checks", () => {
+    expect(() => previewPolicyBundle(baseCard)).toThrow("trusted buyer attestation");
   });
 
   it("rejected -> single deny-all policy", () => {
     const b = previewPolicyBundle({ ...baseCard, decision: { status: "rejected" } });
+    expect(b.preview_only).toBe(true);
+    expect(b.enforceable).toBe(false);
     expect(b.policies[0]?.default_effect).toBe("deny");
   });
 
-  it("approved-with-conditions yields one policy per condition", () => {
-    const b = previewPolicyBundle({
+  it("blocks approved-with-conditions even with condition text", () => {
+    expect(() => previewPolicyBundle({
       ...baseCard,
       decision: { status: "approved-with-conditions" },
       conditions: [
         { id: "dpa-signed", description: "DPA on file" },
         { id: "bias-audit", description: "Bias audit refreshed" },
       ],
-    });
-    expect(b.policies).toHaveLength(2);
+    })).toThrow("trusted buyer attestation");
   });
 
-  it("fail-safe deny when status is approved-with-conditions but conditions is empty", () => {
-    const b = previewPolicyBundle({
+  it("blocks approved-with-conditions when conditions are empty", () => {
+    expect(() => previewPolicyBundle({
       ...baseCard,
       decision: { status: "approved-with-conditions" },
       conditions: [],
-    });
+    })).toThrow("trusted buyer attestation");
+  });
+
+  it("pending remains an illustrative deny preview", () => {
+    const b = previewPolicyBundle({ ...baseCard, decision: { status: "pending" } });
     expect(b.policies[0]?.default_effect).toBe("deny");
+    expect(b.enforceable).toBe(false);
   });
 });
 
@@ -132,6 +148,8 @@ describe("planRemediation", () => {
       affected_documents: ["tool:lookup"],
     });
     expect(plan.steps[0]?.action).toBe("revalidate");
+    expect(plan.steps[0]?.rationale).not.toContain("tool drift");
+    expect(plan.graph_correlation_performed).toBe(false);
   });
 
   it("critical severity bumps urgency to critical", () => {
@@ -145,12 +163,20 @@ describe("planRemediation", () => {
       expect(step.urgency).toBe("critical");
     }
   });
+
+  it("rejects oversized incident inputs before output amplification", () => {
+    expect(() => planRemediation({
+      incident_id: "INC-5", summary: "synthetic", severity: "low",
+      affected_documents: Array.from({ length: 65 }, (_, i) => `tool:${i}`),
+    })).toThrow("input limits");
+  });
 });
 
 describe("checkContractCompatibility", () => {
   const prev = {
     dataset_id: "users.daily_active",
     version: "1.0.0",
+    owners: [{ team: "data-platform" }],
     primary_key: ["user_id"],
     fields: [
       { name: "user_id", type: "string" as const },
@@ -182,6 +208,14 @@ describe("checkContractCompatibility", () => {
     expect(r.issues.some((i) => i.kind === "primary_key_changed")).toBe(true);
   });
 
+  it("does not confuse a comma in one key with two key fields", () => {
+    const r = checkContractCompatibility(
+      { ...prev, primary_key: ["a,b"] },
+      { ...prev, version: "2.0.0", primary_key: ["a", "b"] },
+    );
+    expect(r.issues.some((i) => i.kind === "primary_key_changed")).toBe(true);
+  });
+
   it("non-increasing version is breaking", () => {
     const r = checkContractCompatibility(prev, prev);
     expect(r.issues.some((i) => i.kind === "version_not_increasing")).toBe(true);
@@ -204,5 +238,11 @@ describe("checkContractCompatibility", () => {
     expect(() =>
       checkContractCompatibility(prev, { ...prev, dataset_id: "other", version: "2.0.0" }),
     ).toThrow();
+  });
+
+  it("reports missing owner and rejects malformed semver in pure compatibility checks", () => {
+    const r = checkContractCompatibility(prev, { ...prev, owners: [], version: "2.0.0garbage" });
+    expect(r.compatible).toBe(false);
+    expect(r.issues.map((i) => i.kind)).toEqual(["owner_missing", "version_not_increasing"]);
   });
 });

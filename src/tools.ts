@@ -31,56 +31,63 @@ export const tools: ToolHandler[] = [];
 
 const DecisionCardSchema = z.object({
   decision_card_version: z.string(),
-  decision_id: z.string().min(1),
-  issued_at: z.string().min(1),
+  decision_id: z.string().min(1).max(128),
+  issued_at: z.string().min(1).max(64),
   buyer: z.object({
-    name: z.string().min(1),
-    type: z.string().min(1),
-  }),
+    name: z.string().min(1).max(256),
+    type: z.string().min(1).max(64),
+  }).passthrough(),
   decision: z.object({
-    status: z.string().min(1),
-  }),
+    status: z.string().min(1).max(64),
+  }).passthrough(),
   subject: z.object({
-    vendor_name: z.string().min(1),
-  }),
-  rationale: z.string().min(1),
+    vendor_name: z.string().min(1).max(256),
+  }).passthrough(),
+  rationale: z.string().min(1).max(4096),
   conditions: z
-    .array(z.object({ id: z.string().min(1), description: z.string().min(1) }))
+    .array(z.object({ id: z.string().min(1).max(128), description: z.string().min(1).max(1024) }).passthrough())
+    .max(32)
     .optional(),
   withdrawal: z
     .object({
-      at: z.string().min(1),
-      reason: z.string().min(1),
-    })
+      at: z.string().min(1).max(64),
+      reason: z.string().min(1).max(1024),
+    }).passthrough()
     .optional(),
   publication: z
     .object({
       is_public: z.boolean().optional(),
-      publication_uri: z.string().optional(),
-    })
+      publication_uri: z.string().max(2048).optional(),
+    }).passthrough()
     .optional(),
-});
+}).passthrough();
 
 const IncidentSchema = z.object({
-  incident_id: z.string().min(1),
-  summary: z.string().min(1),
+  incident_id: z.string().min(1).max(128),
+  summary: z.string().min(1).max(512),
   severity: z.enum(["critical", "high", "medium", "low"]),
-  affected_documents: z.array(z.string().min(1)).min(1),
+  affected_documents: z.array(z.string().min(1).max(128)).min(1).max(64),
 });
 
 const DataFieldSchema = z.object({
-  name: z.string().min(1),
+  name: z.string().min(1).max(128),
   type: z.enum(["string", "integer", "number", "boolean", "timestamp", "json"]),
   required: z.boolean().optional(),
-  enum: z.array(z.union([z.string(), z.number(), z.boolean()])).optional(),
-});
+  enum: z.array(z.union([z.string().max(256), z.number(), z.boolean()])).max(100).optional(),
+}).passthrough();
+
+const OwnerSchema = z.object({
+  team: z.string().min(1).max(256),
+  contact: z.string().max(256).optional(),
+}).passthrough();
 
 const DataContractSchema = z.object({
-  dataset_id: z.string().min(1),
-  version: z.string().min(1),
-  fields: z.array(DataFieldSchema).min(1),
-  primary_key: z.array(z.string().min(1)).optional(),
-});
+  dataset_id: z.string().min(1).max(128),
+  version: z.string().max(64).regex(/^\d+\.\d+\.\d+$/),
+  fields: z.array(DataFieldSchema).min(1).max(200),
+  owners: z.array(OwnerSchema).min(1).max(20),
+  primary_key: z.array(z.string().min(1).max(128)).max(20).optional(),
+}).passthrough();
 
 const CompatibilitySchema = z.object({
   previous: DataContractSchema,
@@ -98,9 +105,9 @@ export function registerTools(): void {
   tools.push({
     name: "validate_decision_card",
     description:
-      "Validate an AI Procurement Decision Card against the v0.1 schema + conditional rules. " +
-      "Returns the same structured issue list `procurement-decision-api`'s /decisions/validate " +
-      "would return, without calling the service.",
+      "Check selected v0.1 Decision Card fields and three conditional rules offline. " +
+      "The result marks its limited scope; it does not validate the full schema or " +
+      "replace procurement-decision-api's authoritative validation.",
     inputSchema: zodToJsonSchema(DecisionCardSchema),
     handler: (args) => validateDecisionCard(DecisionCardSchema.parse(args)),
   });
@@ -108,9 +115,9 @@ export function registerTools(): void {
   tools.push({
     name: "preview_policy_bundle",
     description:
-      "Preview the PolicyBundle that `policy-as-code-engine`'s POST /bundles/from-decision-card " +
-      "would generate from this Decision Card. Useful for showing operators what runtime gate " +
-      "will apply *before* the card is signed.",
+      "Show an illustrative, non-enforceable deny policy for rejected, withdrawn, expired, " +
+      "or pending Decision Cards. Approvals fail closed: only the live policy service can " +
+      "verify buyer attestation and resource/action scope.",
     inputSchema: zodToJsonSchema(DecisionCardSchema),
     handler: (args) => previewPolicyBundle(DecisionCardSchema.parse(args)),
   });
@@ -118,9 +125,9 @@ export function registerTools(): void {
   tools.push({
     name: "plan_incident_remediation",
     description:
-      "Given an AI Incident Card with one or more affected documents, return the action + " +
-      "urgency for each document. Mirrors `incident-correlation-rs.correlate()` at single-hop " +
-      "scale — for full graph walks call the Rust service.",
+      "Offline triage for directly named affected documents only. Returns suggested " +
+      "action and urgency; does not validate graph nodes or perform the Rust " +
+      "service's graph correlation, paging, or audit delivery.",
     inputSchema: zodToJsonSchema(IncidentSchema),
     handler: (args) => planRemediation(IncidentSchema.parse(args)),
   });
@@ -128,10 +135,9 @@ export function registerTools(): void {
   tools.push({
     name: "check_contract_compatibility",
     description:
-      "Run the same compatibility checks `data-contract-registry`'s POST /contracts/check would " +
-      "run. Supports backward / forward / full modes. Returns a structured issue list with " +
-      "field_removed / field_type_changed / field_required_added / field_enum_shrunk / " +
-      "primary_key_changed / version_not_increasing kinds.",
+      "Run an offline structural subset of the data-contract-registry compatibility " +
+      "checks in backward, forward, or full mode. Not a registry validation or " +
+      "promotion decision; the live service remains authoritative.",
     inputSchema: zodToJsonSchema(CompatibilitySchema),
     handler: (args) => {
       const parsed = CompatibilitySchema.parse(args);
@@ -161,7 +167,7 @@ function zodToJsonSchema(schema: z.ZodObject<z.ZodRawShape>): Record<string, unk
     type: "object",
     properties,
     ...(required.length > 0 ? { required } : {}),
-    additionalProperties: false,
+    additionalProperties: schema._def.unknownKeys === "passthrough",
   };
 }
 
@@ -171,7 +177,13 @@ function zodTypeToJsonSchema(type: z.ZodTypeAny): Record<string, unknown> {
   }
   const description = type._def.description;
   if (type instanceof z.ZodString) {
-    return { type: "string", ...(description ? { description } : {}) };
+    const result: Record<string, unknown> = { type: "string", ...(description ? { description } : {}) };
+    for (const check of type._def.checks) {
+      if (check.kind === "min") result.minLength = check.value;
+      if (check.kind === "max") result.maxLength = check.value;
+      if (check.kind === "regex") result.pattern = check.regex.source;
+    }
+    return result;
   }
   if (type instanceof z.ZodNumber) {
     return { type: "number", ...(description ? { description } : {}) };
@@ -190,6 +202,8 @@ function zodTypeToJsonSchema(type: z.ZodTypeAny): Record<string, unknown> {
     return {
       type: "array",
       items: zodTypeToJsonSchema(type.element as z.ZodTypeAny),
+      ...(type._def.minLength ? { minItems: type._def.minLength.value } : {}),
+      ...(type._def.maxLength ? { maxItems: type._def.maxLength.value } : {}),
       ...(description ? { description } : {}),
     };
   }

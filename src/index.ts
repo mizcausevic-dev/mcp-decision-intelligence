@@ -2,17 +2,16 @@
 /**
  * mcp-decision-intelligence — MCP server entry point.
  *
- * Exposes the Kinetic Gain Decision Intelligence portfolio as Claude-callable
- * tools over stdio MCP. The companion to `mcp-reliability-toolkit`: same
- * registry pattern, different problem space.
+ * Exposes selected offline Decision Intelligence previews over stdio MCP.
  *
  * Wire into Claude Desktop:
  *
- *   ~/.config/Claude/claude_desktop_config.json
+ *   Build from source, then use the absolute path to dist/index.js:
  *   {
  *     "mcpServers": {
  *       "decision-intelligence": {
- *         "command": "mcp-decision-intelligence"
+ *         "command": "node",
+ *         "args": ["/absolute/path/to/mcp-decision-intelligence/dist/index.js"]
  *       }
  *     }
  *   }
@@ -21,10 +20,13 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { ZodError } from "zod";
 
+import { PreviewUnavailableError } from "./logic.js";
 import { registerTools, tools } from "./tools.js";
 
 const VERSION = "0.1.0";
+const MAX_ARGUMENT_BYTES = 128 * 1024;
 
 const server = new Server(
   {
@@ -47,11 +49,17 @@ server.setRequestHandler(ListToolsRequestSchema, () => ({
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  if (Buffer.byteLength(JSON.stringify(request.params.arguments ?? {}), "utf8") > MAX_ARGUMENT_BYTES) {
+    return {
+      isError: true,
+      content: [{ type: "text", text: JSON.stringify({ code: "input_too_large", message: "Tool arguments exceed 128 KiB" }) }],
+    };
+  }
   const tool = tools.find((t) => t.name === request.params.name);
   if (!tool) {
     return {
       isError: true,
-      content: [{ type: "text", text: `Unknown tool: ${request.params.name}` }],
+      content: [{ type: "text", text: JSON.stringify({ code: "unknown_tool", message: "Unknown tool" }) }],
     };
   }
   try {
@@ -60,10 +68,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const failure = err instanceof PreviewUnavailableError
+      ? { code: err.code, message: err.message }
+      : err instanceof ZodError
+        ? {
+            code: "invalid_arguments",
+            issues: err.issues.map((issue) => ({ path: issue.path, code: issue.code, message: issue.message })),
+          }
+        : { code: "tool_error", message: "The tool could not process this input" };
     return {
       isError: true,
-      content: [{ type: "text", text: `Error in ${tool.name}: ${message}` }],
+      content: [{ type: "text", text: JSON.stringify(failure) }],
     };
   }
 });
