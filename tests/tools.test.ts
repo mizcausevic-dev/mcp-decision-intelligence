@@ -32,6 +32,17 @@ describe("MCP tool registry", () => {
     expect(contract.owners).toMatchObject({ type: "array", minItems: 1 });
   });
 
+  it("advertises how to select the unified Suite tools instead of this subset", () => {
+    expect(tools.find((tool) => tool.name === "validate_decision_card")?.description)
+      .toContain("mcp-kinetic-gain");
+    expect(tools.find((tool) => tool.name === "preview_policy_bundle")?.description)
+      .toContain("decision_card_to_policy_bundle");
+    expect(tools.find((tool) => tool.name === "plan_incident_remediation")?.description)
+      .toContain("mcp-kinetic-gain incident_remediation_plan");
+    expect(tools.find((tool) => tool.name === "check_contract_compatibility")?.description)
+      .toContain("selected rules");
+  });
+
   const card = {
     decision_card_version: "0.1",
     decision_id: "DEC-001",
@@ -99,5 +110,6 @@ describe("MCP tool registry", () => {
     const contract = { dataset_id: "x", version: "1.0.0", fields: [{ name: "id", type: "string" }] };
     expect(() => tool.handler({ previous: contract, proposed: { ...contract, version: "2.0.0" } })).toThrow();
     expect(() => tool.handler({ previous: { ...contract, owners: [{ team: "team" }] }, proposed: { ...contract, owners: [{ team: "team" }], version: "2.0.0x" } })).toThrow();
+    expect(() => tool.handler({ previous: { ...contract, owners: [{ team: "team" }] }, proposed: { ...contract, owners: [{ team: "team" }], version: "02.0.0" } })).toThrow();
   });
 });

@@ -83,7 +83,7 @@ const OwnerSchema = z.object({
 
 const DataContractSchema = z.object({
   dataset_id: z.string().min(1).max(128),
-  version: z.string().max(64).regex(/^\d+\.\d+\.\d+$/),
+  version: z.string().max(64).regex(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/),
   fields: z.array(DataFieldSchema).min(1).max(200),
   owners: z.array(OwnerSchema).min(1).max(20),
   primary_key: z.array(z.string().min(1).max(128)).max(20).optional(),
@@ -107,7 +107,8 @@ export function registerTools(): void {
     description:
       "Check selected v0.1 Decision Card fields and three conditional rules offline. " +
       "The result marks its limited scope; it does not validate the full schema or " +
-      "replace procurement-decision-api's authoritative validation.",
+      "replace procurement-decision-api's authoritative validation. If the unified " +
+      "mcp-kinetic-gain server is available, use its decision_card_validate for Suite schema checks.",
     inputSchema: zodToJsonSchema(DecisionCardSchema),
     handler: (args) => validateDecisionCard(DecisionCardSchema.parse(args)),
   });
@@ -117,7 +118,8 @@ export function registerTools(): void {
     description:
       "Show an illustrative, non-enforceable deny policy for rejected, withdrawn, expired, " +
       "or pending Decision Cards. Approvals fail closed: only the live policy service can " +
-      "verify buyer attestation and resource/action scope.",
+      "verify buyer attestation and resource/action scope. For Suite card inputs, prefer the " +
+      "unified mcp-kinetic-gain decision_card_to_policy_bundle tool.",
     inputSchema: zodToJsonSchema(DecisionCardSchema),
     handler: (args) => previewPolicyBundle(DecisionCardSchema.parse(args)),
   });
@@ -127,7 +129,8 @@ export function registerTools(): void {
     description:
       "Offline triage for directly named affected documents only. Returns suggested " +
       "action and urgency; does not validate graph nodes or perform the Rust " +
-      "service's graph correlation, paging, or audit delivery.",
+      "service's graph correlation, paging, or audit delivery. For Suite Incident Card " +
+      "inputs, prefer mcp-kinetic-gain incident_remediation_plan.",
     inputSchema: zodToJsonSchema(IncidentSchema),
     handler: (args) => planRemediation(IncidentSchema.parse(args)),
   });
@@ -136,8 +139,8 @@ export function registerTools(): void {
     name: "check_contract_compatibility",
     description:
       "Run an offline structural subset of the data-contract-registry compatibility " +
-      "checks in backward, forward, or full mode. Not a registry validation or " +
-      "promotion decision; the live service remains authoritative.",
+      "checks in backward, forward, or full mode. A compatible result covers only " +
+      "selected rules, not full registry validation or promotion; the live service remains authoritative.",
     inputSchema: zodToJsonSchema(CompatibilitySchema),
     handler: (args) => {
       const parsed = CompatibilitySchema.parse(args);

@@ -187,6 +187,28 @@ describe("checkContractCompatibility", () => {
   it("identical-minus-minor-bump is compatible", () => {
     const r = checkContractCompatibility(prev, { ...prev, version: "1.1.0" });
     expect(r.compatible).toBe(true);
+    expect(r.full_registry_validated).toBe(false);
+    expect(r.validation_scope).toBe("selected_structural_rules");
+  });
+
+  it("does not call a newly restricted enum compatible in backward mode", () => {
+    const r = checkContractCompatibility(prev, {
+      ...prev,
+      version: "1.1.0",
+      fields: [{ name: "user_id", type: "string" as const, enum: ["one"] }, prev.fields[1]!],
+    }, "backward");
+    expect(r.compatible).toBe(false);
+    expect(r.issues.some((issue) => issue.kind === "field_enum_shrunk")).toBe(true);
+  });
+
+  it("flags duplicate field names instead of letting Map hide them", () => {
+    const r = checkContractCompatibility(prev, {
+      ...prev,
+      version: "1.1.0",
+      fields: [...prev.fields, { name: "ltv", type: "number" as const, required: false }],
+    });
+    expect(r.compatible).toBe(false);
+    expect(r.issues.some((issue) => issue.kind === "duplicate_field_name" && issue.field === "ltv")).toBe(true);
   });
 
   it("removing a field breaks backward", () => {
@@ -234,6 +256,31 @@ describe("checkContractCompatibility", () => {
     expect(r.issues.some((i) => i.kind === "field_required_added")).toBe(true);
   });
 
+  it("forward mode catches type changes, optionalization, and enum expansion", () => {
+    const earlier = {
+      ...prev,
+      fields: [{ name: "user_id", type: "string" as const, enum: ["one"] }, prev.fields[1]!],
+    };
+    const r = checkContractCompatibility(earlier, {
+      ...earlier,
+      version: "1.1.0",
+      fields: [{ name: "user_id", type: "number" as const, required: false, enum: [1, 2] }, prev.fields[1]!],
+    }, "forward");
+    expect(r.compatible).toBe(false);
+    expect(r.issues.map((issue) => issue.kind)).toEqual(expect.arrayContaining([
+      "field_type_changed", "field_required_removed", "field_enum_expanded",
+    ]));
+  });
+
+  it("treats an omitted required flag as true, matching the owning registry", () => {
+    const r = checkContractCompatibility(prev, {
+      ...prev,
+      version: "1.1.0",
+      fields: [{ name: "user_id", type: "string" as const, required: true }, prev.fields[1]!],
+    }, "full");
+    expect(r.compatible).toBe(true);
+  });
+
   it("dataset_id mismatch throws", () => {
     expect(() =>
       checkContractCompatibility(prev, { ...prev, dataset_id: "other", version: "2.0.0" }),
@@ -244,5 +291,11 @@ describe("checkContractCompatibility", () => {
     const r = checkContractCompatibility(prev, { ...prev, owners: [], version: "2.0.0garbage" });
     expect(r.compatible).toBe(false);
     expect(r.issues.map((i) => i.kind)).toEqual(["owner_missing", "version_not_increasing"]);
+  });
+
+  it("rejects leading-zero semver like the owning registry", () => {
+    const r = checkContractCompatibility(prev, { ...prev, version: "01.0.0" });
+    expect(r.compatible).toBe(false);
+    expect(r.issues.some((issue) => issue.kind === "version_not_increasing")).toBe(true);
   });
 });

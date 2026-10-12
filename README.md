@@ -31,6 +31,8 @@ The local functions are deterministic, but they cover only selected rules. In pa
 
 The incident tool does not walk a graph; the contract tool does not validate a full registry document; the Decision Card tool does not validate the full upstream schema. Verify real decisions with the owning service. Use fictional or permissioned redacted examples in a Claude conversation; do not paste private procurement, incident, or contract data into an unapproved client.
 
+If you also have the unified [`mcp-kinetic-gain`](https://github.com/mizcausevic-dev/mcp-kinetic-gain) server, use its `decision_card_validate` for Suite schema validation and its `decision_card_to_policy_bundle` or `incident_remediation_plan` for Suite card inputs. This experimental server accepts different input shapes and is not a drop-in replacement. Its contract tool reports `validation_scope: selected_structural_rules` and `full_registry_validated: false`; even `compatible: true` covers only those selected rules. Use the owning services for authorization, contract promotion, and operational incident response.
+
 ---
 
 ## Run from source
@@ -54,7 +56,7 @@ npm run build
 }
 ```
 
-Restart Claude Desktop. The package was not available on the public npm registry when checked on 2026-10-08; the GitHub `v0.1.0` release and this source checkout are separate artifacts. No npm publication is implied here.
+Restart Claude Desktop. The public npm registry returned E404 for this package on 2026-10-12; the GitHub `v0.1.0` release and this source checkout are separate artifacts. No npm publication is implied here.
 
 ---
 

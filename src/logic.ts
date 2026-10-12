@@ -307,6 +307,8 @@ export interface DataContract {
 
 export interface CompatibilityReport {
   compatible: boolean;
+  validation_scope: "selected_structural_rules";
+  full_registry_validated: false;
   mode: "backward" | "forward" | "full";
   issues: ValidationIssue[];
 }
@@ -323,6 +325,18 @@ export function checkContractCompatibility(
   }
 
   const issues: ValidationIssue[] = [];
+  for (const [label, contract] of [["previous", previous], ["proposed", proposed]] as const) {
+    const seen = new Set<string>();
+    for (const field of contract.fields) {
+      if (seen.has(field.name)) {
+        issues.push({
+          severity: "error", field: field.name, kind: "duplicate_field_name",
+          message: `${label} contract declares field "${field.name}" more than once`,
+        });
+      }
+      seen.add(field.name);
+    }
+  }
   if (!proposed.owners?.length) {
     issues.push({
       severity: "error", field: null, kind: "owner_missing",
@@ -352,6 +366,23 @@ export function checkContractCompatibility(
   const prevFields = new Map(previous.fields.map((f) => [f.name, f]));
   const newFields = new Map(proposed.fields.map((f) => [f.name, f]));
 
+  // Both modes reject a newly required field and a changed field type.
+  // The owning registry treats omitted `required` as true.
+  for (const [name, next] of newFields) {
+    const prev = prevFields.get(name);
+    if (!prev && next.required !== false) {
+      issues.push({
+        severity: "error", field: name, kind: "field_required_added",
+        message: `required field "${name}" added; old rows or consumers may lack it`,
+      });
+    } else if (prev && next.type !== prev.type) {
+      issues.push({
+        severity: "error", field: name, kind: "field_type_changed",
+        message: `field "${name}" type changed: ${prev.type} -> ${next.type}`,
+      });
+    }
+  }
+
   if (mode === "backward" || mode === "full") {
     for (const [name, prev] of prevFields) {
       const next = newFields.get(name);
@@ -364,14 +395,6 @@ export function checkContractCompatibility(
         });
         continue;
       }
-      if (next.type !== prev.type) {
-        issues.push({
-          severity: "error",
-          field: name,
-          kind: "field_type_changed",
-          message: `field "${name}" type changed: ${prev.type} -> ${next.type}`,
-        });
-      }
       if (prev.required === false && next.required !== false) {
         issues.push({
           severity: "error",
@@ -380,28 +403,39 @@ export function checkContractCompatibility(
           message: `field "${name}" was optional, now required`,
         });
       }
-      if (prev.enum && next.enum) {
-        const shrunk = prev.enum.filter((v) => !next.enum!.includes(v));
-        if (shrunk.length > 0) {
-          issues.push({
-            severity: "error",
-            field: name,
-            kind: "field_enum_shrunk",
-            message: `field "${name}" enum shrunk; removed values ${JSON.stringify(shrunk)}`,
-          });
-        }
+      if (next.enum && (!prev.enum || prev.enum.some((value) => !next.enum!.includes(value)))) {
+        issues.push({
+          severity: "error", field: name, kind: "field_enum_shrunk",
+          message: prev.enum
+            ? `field "${name}" enum removed previously allowed values`
+            : `field "${name}" now restricts values to an enum`,
+        });
       }
     }
   }
 
   if (mode === "forward" || mode === "full") {
-    for (const [name, next] of newFields) {
-      if (!prevFields.has(name) && next.required !== false) {
+    for (const [name, prev] of prevFields) {
+      const next = newFields.get(name);
+      if (!next) {
+        if (prev.required !== false) {
+          issues.push({
+            severity: "error", field: name, kind: "field_required_removed",
+            message: `required field "${name}" was removed; old readers may require it`,
+          });
+        }
+        continue;
+      }
+      if (prev.required !== false && next.required === false) {
         issues.push({
-          severity: "error",
-          field: name,
-          kind: "field_required_added",
-          message: `required field "${name}" added; old consumers can't populate it`,
+          severity: "error", field: name, kind: "field_required_removed",
+          message: `field "${name}" is now optional; new rows may omit it`,
+        });
+      }
+      if (prev.enum && (!next.enum || next.enum.some((value) => !prev.enum!.includes(value)))) {
+        issues.push({
+          severity: "error", field: name, kind: "field_enum_expanded",
+          message: `field "${name}" may now contain values rejected by the old enum`,
         });
       }
     }
@@ -409,13 +443,15 @@ export function checkContractCompatibility(
 
   return {
     compatible: issues.every((i) => i.severity !== "error"),
+    validation_scope: "selected_structural_rules",
+    full_registry_validated: false,
     mode,
     issues,
   };
 }
 
 function isSemverGreater(a: string, b: string): boolean {
-  const semver = /^\d+\.\d+\.\d+$/;
+  const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
   if (!semver.test(a) || !semver.test(b)) return false;
   const pa = a.split(".").map((n) => BigInt(n));
   const pb = b.split(".").map((n) => BigInt(n));
