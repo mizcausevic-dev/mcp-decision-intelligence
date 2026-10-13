@@ -92,12 +92,24 @@ describe("previewPolicyBundle", () => {
     })).toThrow("trusted buyer attestation");
   });
 
-  it("blocks approved-with-conditions when conditions are empty", () => {
+  it("rejects approved-with-conditions when conditions are empty", () => {
     expect(() => previewPolicyBundle({
       ...baseCard,
       decision: { status: "approved-with-conditions" },
       conditions: [],
-    })).toThrow("trusted buyer attestation");
+    })).toThrow("fails selected v0.1 checks");
+  });
+
+  it("does not preview cards that fail its selected v0.1 checks", () => {
+    const invalidCards = [
+      { ...baseCard, decision_card_version: "0.2", decision: { status: "rejected" } },
+      { ...baseCard, decision: { status: "withdrawn" } },
+      { ...baseCard, decision: { status: "rejected-with-remediation" } },
+      { ...baseCard, decision: { status: "pending" }, publication: { is_public: true } },
+    ];
+    for (const card of invalidCards) {
+      expect(() => previewPolicyBundle(card)).toThrow("fails selected v0.1 checks");
+    }
   });
 
   it("pending remains an illustrative deny preview", () => {

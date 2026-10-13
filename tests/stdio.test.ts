@@ -73,6 +73,20 @@ it("initializes over stdio and fails closed for both approval statuses", async (
     expect(JSON.parse(unsupportedContent.text)).toMatchObject({ code: "unsupported_status" });
     expect(unsupportedContent.text).not.toContain("rejected");
 
+    const invalid = await client.callTool({
+      name: "preview_policy_bundle",
+      arguments: {
+        ...baseCard,
+        decision_card_version: "0.2-private-value",
+        decision: { status: "rejected" },
+      },
+    });
+    expect(invalid.isError).toBe(true);
+    const invalidCardContent = invalid.content.find((item) => item.type === "text");
+    if (invalidCardContent?.type !== "text") throw new Error("Expected text validation error");
+    expect(JSON.parse(invalidCardContent.text)).toMatchObject({ code: "invalid_decision_card" });
+    expect(invalidCardContent.text).not.toContain("0.2-private-value");
+
     const repeated = await client.callTool({
       name: "plan_incident_remediation",
       arguments: {

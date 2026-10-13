@@ -15,7 +15,7 @@ The companion to [`mcp-reliability-toolkit`](https://github.com/mizcausevic-dev/
 | Tool | Related source | What it does |
 | --- | --- | --- |
 | `validate_decision_card` | `procurement-decision-api` | Checks selected v0.1 fields and the three conditional rules. Its result says `full_schema_validated: false`; a `valid` result is limited to this subset. |
-| `preview_policy_bundle` | `policy-as-code-engine` | Returns an illustrative, non-enforceable deny policy for rejected, withdrawn, expired, or pending cards. Approved and conditionally approved cards return a typed error because this server cannot verify the buyer attestation and scope required by the live service. |
+| `preview_policy_bundle` | `policy-as-code-engine` | Returns an illustrative, non-enforceable deny policy for rejected, withdrawn, expired, or pending cards that pass its selected v0.1 checks. Cards failing those checks return `invalid_decision_card`; approved and conditionally approved cards return `trusted_attestation_required` because this server cannot verify the buyer attestation and scope required by the live service. |
 | `plan_incident_remediation` | `incident-correlation-rs` | Suggests one action per distinct, directly named document ID. It does not verify nodes or traverse the Rust service's graph. |
 | `check_contract_compatibility` | `data-contract-registry` | Checks a structural subset in backward / forward / full mode. Input requires contract owners; the registry remains authoritative for validation and promotion. |
 

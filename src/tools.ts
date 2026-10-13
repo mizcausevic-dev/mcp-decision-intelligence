@@ -117,7 +117,8 @@ export function registerTools(): void {
     name: "preview_policy_bundle",
     description:
       "Show an illustrative, non-enforceable deny policy for rejected, withdrawn, expired, " +
-      "or pending Decision Cards. Approvals fail closed: only the live policy service can " +
+      "or pending Decision Cards that pass selected v0.1 checks. Invalid cards and approvals " +
+      "fail closed: only the live policy service can " +
       "verify buyer attestation and resource/action scope. For Suite card inputs, prefer the " +
       "unified mcp-kinetic-gain decision_card_to_policy_bundle tool.",
     inputSchema: zodToJsonSchema(DecisionCardSchema),

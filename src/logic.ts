@@ -158,7 +158,7 @@ const REJECT_STATUSES = new Set([
 export class PreviewUnavailableError extends Error {
   constructor(
     message: string,
-    readonly code: "trusted_attestation_required" | "unsupported_status" = "trusted_attestation_required",
+    readonly code: "trusted_attestation_required" | "unsupported_status" | "invalid_decision_card" = "trusted_attestation_required",
   ) {
     super(message);
   }
@@ -168,6 +168,23 @@ export function previewPolicyBundle(card: DecisionCardInput): PolicyBundlePrevie
   const status = card.decision.status;
   const vendor = card.subject.vendor_name;
   const source = `decision-card:${card.decision_id}`;
+
+  // A selected-rule preview must not assign a policy shape to a card that
+  // already fails the rules this server knows how to check. Keep the error
+  // generic so caller-supplied card values are not reflected in tool output.
+  const report = validateDecisionCard(card);
+  if (report.issues.some((issue) => issue.kind === "unsupported_status")) {
+    throw new PreviewUnavailableError(
+      "Cannot preview a policy for an unsupported Decision Card status",
+      "unsupported_status",
+    );
+  }
+  if (!report.valid) {
+    throw new PreviewUnavailableError(
+      "Cannot preview a policy for a Decision Card that fails selected v0.1 checks",
+      "invalid_decision_card",
+    );
+  }
 
   // The live service requires a trusted buyer attestation, a bound vendor,
   // expiry and action scope before constructing an approving policy. This
@@ -195,7 +212,7 @@ export function previewPolicyBundle(card: DecisionCardInput): PolicyBundlePrevie
     };
   }
 
-  // A status outside the v0.1 vocabulary is not a rejected decision.
+  // Defensive fallback if the supported status set changes without a preview.
   throw new PreviewUnavailableError(
     "Cannot preview a policy for an unsupported Decision Card status",
     "unsupported_status",
