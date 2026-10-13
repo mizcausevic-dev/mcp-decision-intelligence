@@ -156,7 +156,12 @@ const REJECT_STATUSES = new Set([
 ]);
 
 export class PreviewUnavailableError extends Error {
-  readonly code = "trusted_attestation_required";
+  constructor(
+    message: string,
+    readonly code: "trusted_attestation_required" | "unsupported_status" = "trusted_attestation_required",
+  ) {
+    super(message);
+  }
 }
 
 export function previewPolicyBundle(card: DecisionCardInput): PolicyBundlePreview {
@@ -190,8 +195,11 @@ export function previewPolicyBundle(card: DecisionCardInput): PolicyBundlePrevie
     };
   }
 
-  // Unknown status -> deny-all.
-  return previewPolicyBundle({ ...card, decision: { status: "rejected" } });
+  // A status outside the v0.1 vocabulary is not a rejected decision.
+  throw new PreviewUnavailableError(
+    "Cannot preview a policy for an unsupported Decision Card status",
+    "unsupported_status",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -249,7 +257,7 @@ export function planRemediation(card: IncidentCard): RemediationPlan {
     }
   };
 
-  const steps = card.affected_documents.map((id): RemediationStep => {
+  const steps = [...new Set(card.affected_documents)].map((id): RemediationStep => {
     const action: RemediationStep["action"] = id.startsWith("decision:")
       ? "recheck_policy"
       : id.startsWith("vendor:")

@@ -105,6 +105,13 @@ describe("previewPolicyBundle", () => {
     expect(b.policies[0]?.default_effect).toBe("deny");
     expect(b.enforceable).toBe(false);
   });
+
+  it("does not relabel an unsupported status as rejected", () => {
+    expect(() => previewPolicyBundle({
+      ...baseCard,
+      decision: { status: "impossible-approved" },
+    })).toThrow("unsupported Decision Card status");
+  });
 });
 
 describe("planRemediation", () => {
@@ -150,6 +157,17 @@ describe("planRemediation", () => {
     expect(plan.steps[0]?.action).toBe("revalidate");
     expect(plan.steps[0]?.rationale).not.toContain("tool drift");
     expect(plan.graph_correlation_performed).toBe(false);
+  });
+
+  it("returns one action per distinct affected document in first-seen order", () => {
+    const plan = planRemediation({
+      incident_id: "INC-duplicate",
+      summary: "synthetic",
+      severity: "low",
+      affected_documents: ["decision:DEC-001", "tool:lookup", "decision:DEC-001"],
+    });
+    expect(plan.steps.map((step) => step.document_id)).toEqual(["decision:DEC-001", "tool:lookup"]);
+    expect(plan.summary).toContain("2 step(s)");
   });
 
   it("critical severity bumps urgency to critical", () => {

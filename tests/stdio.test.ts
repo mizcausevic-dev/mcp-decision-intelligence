@@ -63,6 +63,32 @@ it("initializes over stdio and fails closed for both approval statuses", async (
       policies: [{ default_effect: "deny" }],
     });
 
+    const unsupported = await client.callTool({
+      name: "preview_policy_bundle",
+      arguments: { ...baseCard, decision: { status: "impossible-approved" } },
+    });
+    expect(unsupported.isError).toBe(true);
+    const unsupportedContent = unsupported.content.find((item) => item.type === "text");
+    if (unsupportedContent?.type !== "text") throw new Error("Expected text status error");
+    expect(JSON.parse(unsupportedContent.text)).toMatchObject({ code: "unsupported_status" });
+    expect(unsupportedContent.text).not.toContain("rejected");
+
+    const repeated = await client.callTool({
+      name: "plan_incident_remediation",
+      arguments: {
+        incident_id: "INC-duplicate",
+        summary: "Synthetic input only",
+        severity: "low",
+        affected_documents: ["decision:DEC-001", "decision:DEC-001"],
+      },
+    });
+    const repeatedContent = repeated.content.find((item) => item.type === "text");
+    if (repeatedContent?.type !== "text") throw new Error("Expected text remediation result");
+    expect(JSON.parse(repeatedContent.text)).toMatchObject({
+      steps: [{ document_id: "decision:DEC-001" }],
+      summary: "1 step(s) recommended; severity=low",
+    });
+
     const tooManyDocuments = await client.callTool({
       name: "plan_incident_remediation",
       arguments: {

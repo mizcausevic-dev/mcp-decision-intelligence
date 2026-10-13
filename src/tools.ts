@@ -127,7 +127,7 @@ export function registerTools(): void {
   tools.push({
     name: "plan_incident_remediation",
     description:
-      "Offline triage for directly named affected documents only. Returns suggested " +
+      "Offline triage for distinct, directly named affected documents only. Returns suggested " +
       "action and urgency; does not validate graph nodes or perform the Rust " +
       "service's graph correlation, paging, or audit delivery. For Suite Incident Card " +
       "inputs, prefer mcp-kinetic-gain incident_remediation_plan.",

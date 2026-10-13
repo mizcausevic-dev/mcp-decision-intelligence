@@ -16,12 +16,12 @@ The companion to [`mcp-reliability-toolkit`](https://github.com/mizcausevic-dev/
 | --- | --- | --- |
 | `validate_decision_card` | `procurement-decision-api` | Checks selected v0.1 fields and the three conditional rules. Its result says `full_schema_validated: false`; a `valid` result is limited to this subset. |
 | `preview_policy_bundle` | `policy-as-code-engine` | Returns an illustrative, non-enforceable deny policy for rejected, withdrawn, expired, or pending cards. Approved and conditionally approved cards return a typed error because this server cannot verify the buyer attestation and scope required by the live service. |
-| `plan_incident_remediation` | `incident-correlation-rs` | Suggests actions for directly named document IDs only. It does not verify nodes or traverse the Rust service's graph. |
+| `plan_incident_remediation` | `incident-correlation-rs` | Suggests one action per distinct, directly named document ID. It does not verify nodes or traverse the Rust service's graph. |
 | `check_contract_compatibility` | `data-contract-registry` | Checks a structural subset in backward / forward / full mode. Input requires contract owners; the registry remains authoritative for validation and promotion. |
 
 Each tool advertises a JSON Schema. The server validates arguments and returns machine-readable MCP errors. These local previews do not grant access, sign decisions, register bundles, page operators, or change any service state.
 
-Inputs are capped at 128 KiB per call, with smaller field and list limits. The incident tool accepts at most 64 document IDs and does not repeat the incident summary in each step.
+Inputs are capped at 128 KiB per call, with smaller field and list limits. The incident tool accepts at most 64 document IDs, coalesces duplicates in first-seen order, and does not repeat the incident summary in each step.
 
 ---
 
