@@ -1,9 +1,7 @@
 /**
- * Pure logic functions — each one mirrors a piece of the Decision Intelligence
- * portfolio's behavior so Claude's tool calls produce deterministic outputs
- * with no LLM-in-the-loop reasoning. The Python / Rust services themselves
- * are the source of truth; this file is the read-only "preview" of what
- * they'd compute given the same inputs.
+ * Pure, offline previews of selected Decision Intelligence rules. The Python
+ * and Rust services remain the source of truth. These functions neither
+ * authenticate decisions nor authorize runtime actions.
  */
 
 // ---------------------------------------------------------------------------
@@ -32,6 +30,8 @@ export interface ValidationIssue {
 
 export interface DecisionCardReport {
   valid: boolean;
+  validation_scope: "selected_v0.1_fields_and_conditional_rules";
+  full_schema_validated: false;
   issues: ValidationIssue[];
   status: string;
   vendor: string;
@@ -42,6 +42,15 @@ export interface DecisionCardReport {
 const CONDITION_REQUIRED = new Set([
   "approved-with-conditions",
   "rejected-with-remediation",
+]);
+
+const DECISION_STATUSES = new Set([
+  "approved", "approved-with-conditions", "rejected", "rejected-with-remediation",
+  "pending", "withdrawn", "expired",
+]);
+const BUYER_TYPES = new Set([
+  "organization", "agency", "school-district", "school", "hospital",
+  "health-system", "research-institution", "auditor", "individual",
 ]);
 
 export function validateDecisionCard(card: DecisionCardInput): DecisionCardReport {
@@ -55,6 +64,25 @@ export function validateDecisionCard(card: DecisionCardInput): DecisionCardRepor
       field: "decision_card_version",
       kind: "unsupported_version",
       message: `decision_card_version must be "0.1"; got ${card.decision_card_version}`,
+    });
+  }
+
+  if (!DECISION_STATUSES.has(status)) {
+    issues.push({
+      severity: "error", field: "decision.status", kind: "unsupported_status",
+      message: `decision.status is not a v0.1 status: ${status}`,
+    });
+  }
+  if (!BUYER_TYPES.has(card.buyer.type)) {
+    issues.push({
+      severity: "error", field: "buyer.type", kind: "unsupported_buyer_type",
+      message: `buyer.type is not a v0.1 buyer type: ${card.buyer.type}`,
+    });
+  }
+  if (card.decision_id.length > 128) {
+    issues.push({
+      severity: "error", field: "decision_id", kind: "decision_id_too_long",
+      message: "decision_id must be at most 128 characters",
     });
   }
 
@@ -88,6 +116,8 @@ export function validateDecisionCard(card: DecisionCardInput): DecisionCardRepor
 
   return {
     valid: issues.every((i) => i.severity !== "error"),
+    validation_scope: "selected_v0.1_fields_and_conditional_rules",
+    full_schema_validated: false,
     issues,
     status,
     vendor: card.subject.vendor_name,
@@ -97,11 +127,12 @@ export function validateDecisionCard(card: DecisionCardInput): DecisionCardRepor
 }
 
 // ---------------------------------------------------------------------------
-// PolicyBundle preview from a Decision Card (mirrors
-// policy-as-code-engine.policy_bundle_from_decision_card)
+// Illustrative deny-only PolicyBundle preview from a Decision Card.
 // ---------------------------------------------------------------------------
 
 export interface PolicyBundlePreview {
+  preview_only: true;
+  enforceable: false;
   bundle_id: string;
   policies: Array<{
     id: string;
@@ -124,13 +155,50 @@ const REJECT_STATUSES = new Set([
   "pending",
 ]);
 
+export class PreviewUnavailableError extends Error {
+  constructor(
+    message: string,
+    readonly code: "trusted_attestation_required" | "unsupported_status" | "invalid_decision_card" = "trusted_attestation_required",
+  ) {
+    super(message);
+  }
+}
+
 export function previewPolicyBundle(card: DecisionCardInput): PolicyBundlePreview {
   const status = card.decision.status;
   const vendor = card.subject.vendor_name;
   const source = `decision-card:${card.decision_id}`;
 
+  // A selected-rule preview must not assign a policy shape to a card that
+  // already fails the rules this server knows how to check. Keep the error
+  // generic so caller-supplied card values are not reflected in tool output.
+  const report = validateDecisionCard(card);
+  if (report.issues.some((issue) => issue.kind === "unsupported_status")) {
+    throw new PreviewUnavailableError(
+      "Cannot preview a policy for an unsupported Decision Card status",
+      "unsupported_status",
+    );
+  }
+  if (!report.valid) {
+    throw new PreviewUnavailableError(
+      "Cannot preview a policy for a Decision Card that fails selected v0.1 checks",
+      "invalid_decision_card",
+    );
+  }
+
+  // The live service requires a trusted buyer attestation, a bound vendor,
+  // expiry and action scope before constructing an approving policy. This
+  // offline process has no way to verify those prerequisites.
+  if (status === "approved" || status === "approved-with-conditions") {
+    throw new PreviewUnavailableError(
+      "Approving policy previews require the live service's trusted buyer attestation and scope checks",
+    );
+  }
+
   if (REJECT_STATUSES.has(status)) {
     return {
+      preview_only: true,
+      enforceable: false,
       bundle_id: `decision-card-${card.decision_id}`,
       source,
       policies: [
@@ -144,48 +212,15 @@ export function previewPolicyBundle(card: DecisionCardInput): PolicyBundlePrevie
     };
   }
 
-  if (status === "approved") {
-    return {
-      bundle_id: `decision-card-${card.decision_id}`,
-      source,
-      policies: [
-        {
-          id: `${card.decision_id}__approved`,
-          description: `Vendor "${vendor}" is approved; all requests permitted.`,
-          default_effect: "allow",
-          rules: [{ id: "approved-allow", effect: "allow", when_kind: "always" }],
-        },
-      ],
-    };
-  }
-
-  if (status === "approved-with-conditions") {
-    const conditions = card.conditions ?? [];
-    if (conditions.length === 0) {
-      // Fail safe — same shape as a rejection.
-      return previewPolicyBundle({
-        ...card,
-        decision: { status: "rejected" },
-      });
-    }
-    return {
-      bundle_id: `decision-card-${card.decision_id}`,
-      source,
-      policies: conditions.map((c) => ({
-        id: `${card.decision_id}__condition__${c.id}`,
-        description: c.description,
-        default_effect: "deny" as const,
-        rules: [{ id: `${c.id}-satisfied`, effect: "allow" as const, when_kind: "eq" }],
-      })),
-    };
-  }
-
-  // Unknown status -> deny-all.
-  return previewPolicyBundle({ ...card, decision: { status: "rejected" } });
+  // Defensive fallback if the supported status set changes without a preview.
+  throw new PreviewUnavailableError(
+    "Cannot preview a policy for an unsupported Decision Card status",
+    "unsupported_status",
+  );
 }
 
 // ---------------------------------------------------------------------------
-// Incident remediation plan (mirrors incident-correlation-rs at small scale)
+// Incident remediation triage for directly named documents only.
 // ---------------------------------------------------------------------------
 
 export interface IncidentCard {
@@ -208,6 +243,8 @@ export interface RemediationStep {
 
 export interface RemediationPlan {
   incident_id: string;
+  triage_scope: "direct_document_ids_only";
+  graph_correlation_performed: false;
   steps: RemediationStep[];
   summary: string;
 }
@@ -215,6 +252,14 @@ export interface RemediationPlan {
 export function planRemediation(card: IncidentCard): RemediationPlan {
   if (card.affected_documents.length === 0) {
     throw new RangeError("incident.affected_documents must contain at least one document id");
+  }
+  if (
+    card.affected_documents.length > 64 ||
+    card.summary.length > 512 ||
+    card.incident_id.length > 128 ||
+    card.affected_documents.some((id) => id.length > 128)
+  ) {
+    throw new RangeError("incident exceeds the local triage input limits");
   }
   const baseUrgency = (severity: IncidentCard["severity"]): RemediationStep["urgency"] => {
     switch (severity) {
@@ -229,7 +274,7 @@ export function planRemediation(card: IncidentCard): RemediationPlan {
     }
   };
 
-  const steps = card.affected_documents.map((id): RemediationStep => {
+  const steps = [...new Set(card.affected_documents)].map((id): RemediationStep => {
     const action: RemediationStep["action"] = id.startsWith("decision:")
       ? "recheck_policy"
       : id.startsWith("vendor:")
@@ -240,32 +285,34 @@ export function planRemediation(card: IncidentCard): RemediationPlan {
       document_id: id,
       action,
       urgency,
-      rationale: rationaleFor(action, id, card.summary),
+      rationale: rationaleFor(action, id),
     };
   });
 
   return {
     incident_id: card.incident_id,
+    triage_scope: "direct_document_ids_only",
+    graph_correlation_performed: false,
     steps,
     summary: `${steps.length} step(s) recommended; severity=${card.severity}`,
   };
 }
 
-function rationaleFor(action: RemediationStep["action"], id: string, summary: string): string {
+function rationaleFor(action: RemediationStep["action"], id: string): string {
   switch (action) {
     case "recheck_policy":
-      return `Re-evaluate the PolicyBundle generated from ${id}. Incident: ${summary}`;
+      return `Review the policy associated with ${id}.`;
     case "request_review":
-      return `Bring forward a fresh procurement review for ${id}. Incident: ${summary}`;
+      return `Request a fresh procurement review for ${id}.`;
     case "revalidate":
-      return `Re-fetch + re-validate ${id} via aeo-validator-service. Incident: ${summary}`;
+      return `Re-fetch and re-validate ${id} with its owning service.`;
     case "page":
-      return `Page the on-call. Incident: ${summary}`;
+      return "Recommend paging the on-call owner.";
   }
 }
 
 // ---------------------------------------------------------------------------
-// Data contract compatibility (mirrors data-contract-registry rules at preview scale)
+// Data contract structural compatibility subset.
 // ---------------------------------------------------------------------------
 
 export interface DataField {
@@ -279,11 +326,14 @@ export interface DataContract {
   dataset_id: string;
   version: string;
   fields: DataField[];
+  owners?: Array<{ team: string; contact?: string }>;
   primary_key?: string[];
 }
 
 export interface CompatibilityReport {
   compatible: boolean;
+  validation_scope: "selected_structural_rules";
+  full_registry_validated: false;
   mode: "backward" | "forward" | "full";
   issues: ValidationIssue[];
 }
@@ -300,6 +350,24 @@ export function checkContractCompatibility(
   }
 
   const issues: ValidationIssue[] = [];
+  for (const [label, contract] of [["previous", previous], ["proposed", proposed]] as const) {
+    const seen = new Set<string>();
+    for (const field of contract.fields) {
+      if (seen.has(field.name)) {
+        issues.push({
+          severity: "error", field: field.name, kind: "duplicate_field_name",
+          message: `${label} contract declares field "${field.name}" more than once`,
+        });
+      }
+      seen.add(field.name);
+    }
+  }
+  if (!proposed.owners?.length) {
+    issues.push({
+      severity: "error", field: null, kind: "owner_missing",
+      message: "proposed contract must declare at least one owner",
+    });
+  }
   if (!isSemverGreater(proposed.version, previous.version)) {
     issues.push({
       severity: "error",
@@ -309,19 +377,36 @@ export function checkContractCompatibility(
     });
   }
 
-  const prevPK = (previous.primary_key ?? []).join(",");
-  const newPK = (proposed.primary_key ?? []).join(",");
-  if (prevPK !== newPK) {
+  const prevPK = previous.primary_key ?? [];
+  const newPK = proposed.primary_key ?? [];
+  if (prevPK.length !== newPK.length || prevPK.some((key, index) => key !== newPK[index])) {
     issues.push({
       severity: "error",
       field: null,
       kind: "primary_key_changed",
-      message: `primary_key changed: [${prevPK}] -> [${newPK}]`,
+      message: `primary_key changed: ${JSON.stringify(prevPK)} -> ${JSON.stringify(newPK)}`,
     });
   }
 
   const prevFields = new Map(previous.fields.map((f) => [f.name, f]));
   const newFields = new Map(proposed.fields.map((f) => [f.name, f]));
+
+  // Both modes reject a newly required field and a changed field type.
+  // The owning registry treats omitted `required` as true.
+  for (const [name, next] of newFields) {
+    const prev = prevFields.get(name);
+    if (!prev && next.required !== false) {
+      issues.push({
+        severity: "error", field: name, kind: "field_required_added",
+        message: `required field "${name}" added; old rows or consumers may lack it`,
+      });
+    } else if (prev && next.type !== prev.type) {
+      issues.push({
+        severity: "error", field: name, kind: "field_type_changed",
+        message: `field "${name}" type changed: ${prev.type} -> ${next.type}`,
+      });
+    }
+  }
 
   if (mode === "backward" || mode === "full") {
     for (const [name, prev] of prevFields) {
@@ -335,14 +420,6 @@ export function checkContractCompatibility(
         });
         continue;
       }
-      if (next.type !== prev.type) {
-        issues.push({
-          severity: "error",
-          field: name,
-          kind: "field_type_changed",
-          message: `field "${name}" type changed: ${prev.type} -> ${next.type}`,
-        });
-      }
       if (prev.required === false && next.required !== false) {
         issues.push({
           severity: "error",
@@ -351,28 +428,39 @@ export function checkContractCompatibility(
           message: `field "${name}" was optional, now required`,
         });
       }
-      if (prev.enum && next.enum) {
-        const shrunk = prev.enum.filter((v) => !next.enum!.includes(v));
-        if (shrunk.length > 0) {
-          issues.push({
-            severity: "error",
-            field: name,
-            kind: "field_enum_shrunk",
-            message: `field "${name}" enum shrunk; removed values ${JSON.stringify(shrunk)}`,
-          });
-        }
+      if (next.enum && (!prev.enum || prev.enum.some((value) => !next.enum!.includes(value)))) {
+        issues.push({
+          severity: "error", field: name, kind: "field_enum_shrunk",
+          message: prev.enum
+            ? `field "${name}" enum removed previously allowed values`
+            : `field "${name}" now restricts values to an enum`,
+        });
       }
     }
   }
 
   if (mode === "forward" || mode === "full") {
-    for (const [name, next] of newFields) {
-      if (!prevFields.has(name) && next.required !== false) {
+    for (const [name, prev] of prevFields) {
+      const next = newFields.get(name);
+      if (!next) {
+        if (prev.required !== false) {
+          issues.push({
+            severity: "error", field: name, kind: "field_required_removed",
+            message: `required field "${name}" was removed; old readers may require it`,
+          });
+        }
+        continue;
+      }
+      if (prev.required !== false && next.required === false) {
         issues.push({
-          severity: "error",
-          field: name,
-          kind: "field_required_added",
-          message: `required field "${name}" added; old consumers can't populate it`,
+          severity: "error", field: name, kind: "field_required_removed",
+          message: `field "${name}" is now optional; new rows may omit it`,
+        });
+      }
+      if (prev.enum && (!next.enum || next.enum.some((value) => !prev.enum!.includes(value)))) {
+        issues.push({
+          severity: "error", field: name, kind: "field_enum_expanded",
+          message: `field "${name}" may now contain values rejected by the old enum`,
         });
       }
     }
@@ -380,17 +468,21 @@ export function checkContractCompatibility(
 
   return {
     compatible: issues.every((i) => i.severity !== "error"),
+    validation_scope: "selected_structural_rules",
+    full_registry_validated: false,
     mode,
     issues,
   };
 }
 
 function isSemverGreater(a: string, b: string): boolean {
-  const pa = a.split(".").map((n) => parseInt(n, 10));
-  const pb = b.split(".").map((n) => parseInt(n, 10));
+  const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+  if (!semver.test(a) || !semver.test(b)) return false;
+  const pa = a.split(".").map((n) => BigInt(n));
+  const pb = b.split(".").map((n) => BigInt(n));
   for (let i = 0; i < 3; i++) {
-    const av = pa[i] ?? 0;
-    const bv = pb[i] ?? 0;
+    const av = pa[i] ?? 0n;
+    const bv = pb[i] ?? 0n;
     if (av > bv) return true;
     if (av < bv) return false;
   }
